@@ -1,15 +1,12 @@
 package mediaplayer.patryk.mediaplayerpatryk;
 
-/**
- * Created by Mateusz on 30.06.2017.
- */
 
 public class Song {
     private String title;
     private String artist;
     private String url;
     private String imageUrl;
-    private long duration;
+    private int duration;
 
     public String getTitle() {
         return title;
@@ -35,11 +32,11 @@ public class Song {
         this.url = url;
     }
 
-    public long getDuration() {
+    public int getDuration() {
         return duration;
     }
 
-    public void setDuration(long duration) {
+    public void setDuration(int duration) {
         this.duration = duration;
     }
 

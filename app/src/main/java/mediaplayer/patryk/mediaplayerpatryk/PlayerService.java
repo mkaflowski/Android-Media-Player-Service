@@ -11,9 +11,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
 import android.media.AudioManager;
-import android.media.session.PlaybackState;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
 import android.os.SystemClock;
 import android.support.annotation.NonNull;
@@ -47,6 +47,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     private static final String ACTION_PAUSE = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_PAUSE";
     private static final String ACTION_NEXT = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_NEXT";
     private static final String ACTION_PREVIOUS = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_PREVIOUS";
+    private static final String ACTION_SEND_INFO = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_SEND_INFO";
 
     private static final String EXTRA_PARAM1 = "mediaplayer.patryk.mediaplayerpatryk.PARAM1";
     private static final String EXTRA_PARAM2 = "mediaplayer.patryk.mediaplayerpatryk.PARAM2";
@@ -59,17 +60,18 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     public final static String PAUSE_ACTION = "PAUSE_ACTION";
     public final static String NEXT_ACTION = "NEXT_ACTION";
     public final static String PREVIOUS_ACTION = "PREVIOUS_ACTION";
-    public final static String DELETE_ACTION = "PREVIOUS_ACTION";
-    public final static String MINUS_TIME_ACTION = "PREVIOUS_ACTION";
-    public final static String PLUS_TIME_ACTION = "PREVIOUS_ACTION";
+    public final static String DELETE_ACTION = "DELETE_ACTION";
+    public final static String MINUS_TIME_ACTION = "MINUS_TIME_ACTION";
+    public final static String PLUS_TIME_ACTION = "PLUS_TIME_ACTION";
 
 
     public final static String EXTRA_BUNDLE = "EXTRA_BUNDLE";
     public final static String TOTAL_TIME_VALUE_EXTRA = "TOTAL_TIME_VALUE_EXTRA";
-    private final String ACTUAL_TIME_VALUE_EXTRA = "ACTUAL_TIME_VALUE_EXTRA";
-
-
-    public static final int NOTIFICATION_ID = 117;
+    public final static String ACTUAL_TIME_VALUE_EXTRA = "ACTUAL_TIME_VALUE_EXTRA";
+    public final static String COVER_URL_EXTRA = "COVER_URL_EXTRA";
+    public final static String TITLE_EXTRA = "TITLE_EXTRA";
+    public final static String ARTIST_EXTRA = "ARTIST_EXTRA";
+    public final static String URL_EXTRA = "URL_EXTRA";
 
 
     private PlayerServiceBinder binder = new PlayerServiceBinder();
@@ -84,6 +86,9 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     private boolean isPrepared;
     private boolean shouldPlay;
     private boolean isNoisyReceiverRegistered;
+    private Thread updateThread;
+    private Handler mainThreadHandler;
+    private ScreenReceiver screenReceiver;
 
     private Bitmap cover;
     // TODO: 30.06.2017 ustawic coverPlaceholderId i notificationId
@@ -167,7 +172,57 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     public void onCreate() {
         super.onCreate();
         initMediaSession();
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
+        registerReceiver(screenReceiver, filter);
     }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+
+        mainThreadHandler = new Handler();
+
+        if (intent != null) {
+            if (intent.getAction().equals(ACTION_SET_PLAYLIST)) {
+                String playlistName = intent.getStringExtra(EXTRA_PARAM1);
+                int songPosition = intent.getIntExtra(EXTRA_PARAM2, 0);
+                handleActionSetPlaylist(playlistName, songPosition);
+                KLog.d(ACTION_SET_PLAYLIST);
+            }
+
+            if (intent.getAction().equals(ACTION_PLAY)) {
+                play();
+                KLog.d(ACTION_PLAY);
+            }
+
+            if (intent.getAction().equals(ACTION_PAUSE)) {
+                pause();
+                KLog.d(ACTION_PAUSE);
+            }
+
+            if (intent.getAction().equals(ACTION_NEXT)) {
+                nextSong(player.isPlaying());
+                KLog.d(ACTION_NEXT);
+            }
+
+            if (intent.getAction().equals(ACTION_SEND_INFO)) {
+                sendInfoBroadcast();
+                KLog.d(ACTION_SEND_INFO);
+            }
+
+            if (intent.getAction().equals(ACTION_PREVIOUS)) {
+                previousSong(player.isPlaying());
+                KLog.d(PREVIOUS_ACTION);
+            } else {
+                // Try to handle the intent as a media button event wrapped by MediaButtonReceiver
+                MediaButtonReceiver.handleIntent(mediaSessionCompat, intent);
+            }
+        }
+        return super.onStartCommand(intent, flags, startId);
+    }
+
+
 
     @Override
     public void onDestroy() {
@@ -179,18 +234,33 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         if (player != null)
             player.release();
 
+        isUpdatingThread = false;
         stopForeground(true);
         abandonAudioFocus();
         cancelNotification();
         //// TODO: 30.06.2017 odkomentować
-//        unregisterReceiver(screenReceiver);
-//        unregisterReceiver(audioJackReceiver);
+        unregisterReceiver(screenReceiver);
         mediaSessionCompat.setActive(false);
         mediaSessionCompat.release();
     }
 
+    private void sendInfoBroadcast() {
+        if(player == null || currentSong == null)
+            return;
+
+        Intent updateIntent = new Intent();
+        updateIntent.setAction(GUI_UPDATE_ACTION);
+        updateIntent.putExtra(URL_EXTRA, currentSong.getUrl());
+        updateIntent.putExtra(ARTIST_EXTRA, currentSong.getArtist());
+        updateIntent.putExtra(TITLE_EXTRA, currentSong.getTitle());
+        updateIntent.putExtra(COVER_URL_EXTRA, currentSong.getImageUrl());
+        updateIntent.putExtra(ACTUAL_TIME_VALUE_EXTRA, player.getCurrentPosition());
+        updateIntent.putExtra(TOTAL_TIME_VALUE_EXTRA, player.getDuration());
+        sendBroadcast(updateIntent);
+    }
+
     private void cancelNotification() {
-        // TODO: 30.06.2017  
+        // TODO: 30.06.2017
     }
 
     private void initMediaSession() {
@@ -213,50 +283,12 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
 
         setMediaPlaybackState(PlaybackStateCompat.STATE_PLAYING);
         mediaSessionCompat.setActive(true);
-        KLog.d(mediaSessionCompat.getSessionToken());
         setSessionToken(mediaSessionCompat.getSessionToken());
-    }
-
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        // TODO: 30.06.2017 usunąć logi
-        if (intent != null) {
-            if (intent.getAction().equals(ACTION_SET_PLAYLIST)) {
-                String playlistName = intent.getStringExtra(EXTRA_PARAM1);
-                int songPosition = intent.getIntExtra(EXTRA_PARAM2, 0);
-                handleActionSetPlaylist(playlistName, songPosition);
-                KLog.w(1);
-            }
-
-            if (intent.getAction().equals(ACTION_PLAY)) {
-                play();
-                KLog.d(ACTION_PLAY);
-            }
-
-            if (intent.getAction().equals(ACTION_PAUSE)) {
-                pause();
-                KLog.d(ACTION_PAUSE);
-            }
-
-            if (intent.getAction().equals(ACTION_NEXT)) {
-                nextSong(player.isPlaying());
-                KLog.d(ACTION_NEXT);
-            }
-
-            if (intent.getAction().equals(ACTION_PREVIOUS)) {
-                previousSong(player.isPlaying());
-                KLog.d(PREVIOUS_ACTION);
-            } else {
-                // Try to handle the intent as a media button event wrapped by MediaButtonReceiver
-                MediaButtonReceiver.handleIntent(mediaSessionCompat, intent);
-            }
-        }
-        return super.onStartCommand(intent, flags, startId);
     }
 
     private void handleActionSetPlaylist(String playlistName, int songPos) {
         KLog.d("handleActionSetPlaylist");
-        playlist = getPlaylist(playlistName);
+        playlist = PlaylistHandler.getPlaylist(this, playlistName);
         songPosition = songPos;
         currentSong = playlist.getSongs().get(songPosition);
         createPlayer(false);
@@ -276,7 +308,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         currentSong = playlist.getSongs().get(songPosition);
         createPlayer(playOnLoaded);
 
-        sendBroadcastWithAction(NEXT_ACTION, null);
+        sendBroadcastWithAction(NEXT_ACTION);
         loadCover();
     }
 
@@ -293,7 +325,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         currentSong = playlist.getSongs().get(songPosition);
         createPlayer(playOnLoaded);
 
-        sendBroadcastWithAction(PREVIOUS_ACTION, null);
+        sendBroadcastWithAction(PREVIOUS_ACTION);
 
         KLog.e("previous currentEpisode");
         loadCover();
@@ -301,8 +333,6 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
 
     private void loadCover() {
         final ImageView iv = new ImageView(this);
-
-        KLog.d(currentSong.getImageUrl());
 
         if (currentSong.getImageUrl() != null && !currentSong.getImageUrl().isEmpty())
             Picasso.with(this).load(currentSong.getImageUrl()).placeholder(coverPlaceholderId).into(iv, new Callback() {
@@ -359,7 +389,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         KLog.d("pause");
 
         Intent updateIntent = new Intent();
-        sendBroadcastWithAction(PAUSE_ACTION, null);
+        sendBroadcastWithAction(PAUSE_ACTION);
         sendBroadcast(updateIntent);
         isUpdatingThread = false;
 
@@ -382,9 +412,11 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
             return;
 
         player.seekTo(time);
-        Bundle bundle = new Bundle();
-        bundle.putInt(ACTUAL_TIME_VALUE_EXTRA, player.getCurrentPosition());
-        sendBroadcastWithAction(GUI_UPDATE_ACTION, bundle);
+
+        Intent updateIntent = new Intent();
+        updateIntent.setAction(GUI_UPDATE_ACTION);
+        updateIntent.putExtra(ACTUAL_TIME_VALUE_EXTRA, player.getCurrentPosition());
+        sendBroadcast(updateIntent);
     }
 
     private void makeNotification() {
@@ -442,7 +474,41 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     }
 
     private void startUiUpdateThread() {
-        // TODO: 30.06.2017  
+        if (mainThreadHandler == null) {
+            isUpdatingThread = false;
+            return;
+        }
+
+        isUpdatingThread = true;
+        if (updateThread == null) {
+            updateThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+
+                    Intent guiUpdateIntent = new Intent();
+                    guiUpdateIntent.setAction(GUI_UPDATE_ACTION);
+
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+
+                    while (isUpdatingThread && isPrepared) {
+                        guiUpdateIntent.putExtra(ACTUAL_TIME_VALUE_EXTRA, player.getCurrentPosition());
+                        sendBroadcast(guiUpdateIntent);
+                        try {
+                            Thread.sleep(200);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                    updateThread = null;
+                }
+            });
+
+            updateThread.start();
+        }
     }
 
     private void updateMediaSessionMetaData() {
@@ -485,7 +551,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
             return;
         }
 
-        sendBroadcastWithAction(LOADING_ACTION, null);
+        sendBroadcastWithAction(LOADING_ACTION);
 
         isPrepared = false;
         killPlayer();
@@ -505,11 +571,13 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
             @Override
             public void onPrepared(HybridMediaPlayer player) {
                 KLog.d("song prepared");
-                sendBroadcastWithAction(LOADED_ACTION, null);
+                sendBroadcastWithAction(LOADED_ACTION);
 
-                Bundle extraBundle = new Bundle();
-                extraBundle.putInt(TOTAL_TIME_VALUE_EXTRA, player.getDuration());
-                sendBroadcastWithAction(GUI_UPDATE_ACTION, extraBundle);
+
+                Intent updateIntent = new Intent();
+                updateIntent.setAction(GUI_UPDATE_ACTION);
+                updateIntent.putExtra(TOTAL_TIME_VALUE_EXTRA, player.getDuration());
+                sendBroadcast(updateIntent);
 
                 isPrepared = true;
 
@@ -524,14 +592,14 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
             @Override
             public void onCompletion(HybridMediaPlayer player) {
                 if (songPosition == playlist.getSongs().size() - 1) {
-                    sendBroadcastWithAction(COMPLETE_ACTION, null);
+                    sendBroadcastWithAction(COMPLETE_ACTION);
                     pause();
                     isUpdatingThread = false;
                     KLog.i("KONIEC PLAYLISTY");
 
                 } else {
                     KLog.i("KONIEC PIOSENKI");
-                    sendBroadcastWithAction(COMPLETE_ACTION, null);
+                    sendBroadcastWithAction(COMPLETE_ACTION);
                     isUpdatingThread = false;
                     nextSong(true);
                 }
@@ -541,10 +609,9 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         player.prepare();
     }
 
-    private void sendBroadcastWithAction(String loadingAction, Bundle bundle) {
+    private void sendBroadcastWithAction(String loadingAction) {
         Intent updateIntent = new Intent();
         updateIntent.setAction(loadingAction);
-        updateIntent.putExtra(EXTRA_BUNDLE, bundle);
         sendBroadcast(updateIntent);
     }
 
@@ -593,31 +660,6 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         } else if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
             player.setVolume(0.1f);
         }
-    }
-
-    private Playlist getPlaylist(String playlistName) {
-        // TODO: 30.06.2017 wczytywanie playlisty z realma
-        Song song1 = new Song();
-        song1.setArtist("Art1");
-        song1.setTitle("Title1");
-        song1.setUrl("https://api.soundcloud.com/tracks/98706380/stream?consumer_key=cd9d2e5604410d714e32642a4ec0eed4");
-        song1.setImageUrl("https://upload.wikimedia.org/wikipedia/en/e/e9/In_Spades_%28Afghan_Whigs_cover%29.jpg");
-
-        Song song2 = new Song();
-        song2.setArtist("Art2");
-        song2.setTitle("Title2");
-        song2.setUrl("https://api.soundcloud.com/tracks/289659168/stream?consumer_key=cd9d2e5604410d714e32642a4ec0eed4");
-        song2.setImageUrl("http://cdn.zumic.com/wp-content/uploads/2016/12/run-the-jewels-legend-has-it-soundcloud-cover-art-2016.jpg");
-
-        List<Song> songList = new ArrayList<>();
-        songList.add(song1);
-        songList.add(song2);
-
-        Playlist playlist = new Playlist();
-        playlist.setName("My Playlist");
-        playlist.setSongs(songList);
-
-        return playlist;
     }
 
 
@@ -674,6 +716,28 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         context.startService(intent);
     }
 
+    public static void startActionSendInfoBroadcast(Context context) {
+        Intent intent = new Intent(context, PlayerService.class);
+        intent.setAction(ACTION_SEND_INFO);
+        context.startService(intent);
+    }
+
+    private final class ScreenReceiver extends BroadcastReceiver {
+
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent.getAction() != null)
+                if (intent.getAction().equals(Intent.ACTION_SCREEN_ON)) {
+                    if (player == null || !player.isPlaying())
+                        return;
+
+                    startUiUpdateThread();
+
+                } else if (intent.getAction().equals(Intent.ACTION_SCREEN_OFF)) {
+                    isUpdatingThread = false;
+                }
+        }
+    }
 
     public class PlayerServiceBinder extends Binder {
         public PlayerServiceBinder getService() {
