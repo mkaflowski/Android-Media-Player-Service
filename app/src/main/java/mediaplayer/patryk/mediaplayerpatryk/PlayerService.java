@@ -18,7 +18,6 @@ import android.os.IBinder;
 import android.os.SystemClock;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
-
 import android.support.v4.content.ContextCompat;
 import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaBrowserServiceCompat;
@@ -33,7 +32,6 @@ import com.socks.library.KLog;
 import com.squareup.picasso.Callback;
 import com.squareup.picasso.Picasso;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import hybridmediaplayer.HybridMediaPlayer;
@@ -48,6 +46,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     private static final String ACTION_NEXT = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_NEXT";
     private static final String ACTION_PREVIOUS = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_PREVIOUS";
     private static final String ACTION_SEND_INFO = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_SEND_INFO";
+    private static final String ACTION_SEEK_TO = "mediaplayer.patryk.mediaplayerpatryk.action.ACTION_SEEK_TO";
 
     private static final String EXTRA_PARAM1 = "mediaplayer.patryk.mediaplayerpatryk.PARAM1";
     private static final String EXTRA_PARAM2 = "mediaplayer.patryk.mediaplayerpatryk.PARAM2";
@@ -65,13 +64,14 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     public final static String PLUS_TIME_ACTION = "PLUS_TIME_ACTION";
 
 
-    public final static String EXTRA_BUNDLE = "EXTRA_BUNDLE";
     public final static String TOTAL_TIME_VALUE_EXTRA = "TOTAL_TIME_VALUE_EXTRA";
     public final static String ACTUAL_TIME_VALUE_EXTRA = "ACTUAL_TIME_VALUE_EXTRA";
     public final static String COVER_URL_EXTRA = "COVER_URL_EXTRA";
     public final static String TITLE_EXTRA = "TITLE_EXTRA";
     public final static String ARTIST_EXTRA = "ARTIST_EXTRA";
     public final static String URL_EXTRA = "URL_EXTRA";
+    public final static String SONG_NUM_EXTRA = "SONG_NUM_EXTRA";
+    public final static String PLAYLIST_NAME_NUM_EXTRA = "PLAYLIST_NAME_NUM_EXTRA";
 
 
     private PlayerServiceBinder binder = new PlayerServiceBinder();
@@ -88,7 +88,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     private boolean isNoisyReceiverRegistered;
     private Thread updateThread;
     private Handler mainThreadHandler;
-    private ScreenReceiver screenReceiver;
+    private ScreenReceiver screenReceiver = new ScreenReceiver();
 
     private Bitmap cover;
     // TODO: 30.06.2017 ustawic coverPlaceholderId i notificationId
@@ -180,8 +180,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-
-        mainThreadHandler = new Handler();
+         mainThreadHandler = new Handler();
 
         if (intent != null) {
             if (intent.getAction().equals(ACTION_SET_PLAYLIST)) {
@@ -211,6 +210,12 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
                 KLog.d(ACTION_SEND_INFO);
             }
 
+            if (intent.getAction().equals(ACTION_SEEK_TO)) {
+                int time = intent.getIntExtra(EXTRA_PARAM1, 0);
+                seekTo(time);
+                KLog.d(ACTION_SEEK_TO);
+            }
+
             if (intent.getAction().equals(ACTION_PREVIOUS)) {
                 previousSong(player.isPlaying());
                 KLog.d(PREVIOUS_ACTION);
@@ -219,7 +224,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
                 MediaButtonReceiver.handleIntent(mediaSessionCompat, intent);
             }
         }
-        return super.onStartCommand(intent, flags, startId);
+        return START_NOT_STICKY;
     }
 
 
@@ -227,6 +232,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     @Override
     public void onDestroy() {
         super.onDestroy();
+        KLog.d("onDestroy");
 
         if (isNoisyReceiverRegistered)
             unregisterReceiver(noisyReceiver);
@@ -238,7 +244,6 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         stopForeground(true);
         abandonAudioFocus();
         cancelNotification();
-        //// TODO: 30.06.2017 odkomentować
         unregisterReceiver(screenReceiver);
         mediaSessionCompat.setActive(false);
         mediaSessionCompat.release();
@@ -256,11 +261,14 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         updateIntent.putExtra(COVER_URL_EXTRA, currentSong.getImageUrl());
         updateIntent.putExtra(ACTUAL_TIME_VALUE_EXTRA, player.getCurrentPosition());
         updateIntent.putExtra(TOTAL_TIME_VALUE_EXTRA, player.getDuration());
+        updateIntent.putExtra(SONG_NUM_EXTRA, songPosition);
+        updateIntent.putExtra(PLAYLIST_NAME_NUM_EXTRA, playlist.getName());
         sendBroadcast(updateIntent);
     }
 
     private void cancelNotification() {
-        // TODO: 30.06.2017
+        NotificationManager mNotificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        mNotificationManager.cancel(345);
     }
 
     private void initMediaSession() {
@@ -445,17 +453,28 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
             builder.addAction(R.drawable.play_notification, "Play", pplayIntent);
         builder.addAction(R.drawable.next_pressed, "Rewind", MediaButtonReceiver.buildMediaButtonPendingIntent(this, PlaybackStateCompat.ACTION_SKIP_TO_NEXT));
 
+        Intent deleteIntent = new Intent(this, PlayerService.class);
+        deleteIntent.setAction(DELETE_ACTION);
+        PendingIntent pdeleteIntent = PendingIntent.getService(this, 0,
+                deleteIntent, 0);
 
         builder.setStyle(new NotificationCompat.MediaStyle()
                 .setShowActionsInCompactView(0, 1, 2)
                 .setMediaSession(mediaSessionCompat.getSessionToken())
                 .setCancelButtonIntent(MediaButtonReceiver.buildMediaButtonPendingIntent(this, PlaybackStateCompat.ACTION_STOP))
         );
+        builder.setDeleteIntent(pdeleteIntent);
 
         builder.setColor(ContextCompat.getColor(this,R.color.colorPrimary));
 
         NotificationManager mNotificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        mNotificationManager.notify(345, builder.build());
+        if (player.isPlaying()) {
+            startForeground(345, builder.build());
+        }
+        else {
+            stopForeground(false);
+            mNotificationManager.notify(345, builder.build());
+        }
     }
 
 
@@ -627,6 +646,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         }
     }
 
+
     private boolean retrieveAudioFocus() {
         AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
@@ -719,6 +739,13 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     public static void startActionSendInfoBroadcast(Context context) {
         Intent intent = new Intent(context, PlayerService.class);
         intent.setAction(ACTION_SEND_INFO);
+        context.startService(intent);
+    }
+
+    public static void startActionSeekTo(Context context, int time) {
+        Intent intent = new Intent(context, PlayerService.class);
+        intent.setAction(ACTION_SEEK_TO);
+        intent.putExtra(EXTRA_PARAM1, time);
         context.startService(intent);
     }
 
