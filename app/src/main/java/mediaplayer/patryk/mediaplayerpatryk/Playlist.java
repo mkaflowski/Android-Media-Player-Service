@@ -3,9 +3,6 @@ package mediaplayer.patryk.mediaplayerpatryk;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Created by Mateusz on 30.06.2017.
- */
 
 public class Playlist {
     private List<Song> songs;

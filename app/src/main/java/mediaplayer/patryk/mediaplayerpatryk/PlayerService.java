@@ -34,6 +34,7 @@ import com.squareup.picasso.Picasso;
 
 import java.util.List;
 
+import hybridmediaplayer.ExoMediaPlayer;
 import hybridmediaplayer.HybridMediaPlayer;
 
 import static android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT;
@@ -76,7 +77,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
 
     private PlayerServiceBinder binder = new PlayerServiceBinder();
 
-    private HybridMediaPlayer player;
+    private ExoMediaPlayer player;
     private Playlist playlist;
     private Song currentSong;
     int songPosition;
@@ -149,7 +150,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         public void onSkipToNext() {
             KLog.d("onSkipToNext");
             super.onSkipToNext();
-            nextSong(player.isPlaying());
+            nextSong();
         }
 
         @Override
@@ -180,7 +181,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-         mainThreadHandler = new Handler();
+        mainThreadHandler = new Handler();
 
         if (intent != null) {
             if (intent.getAction().equals(ACTION_SET_PLAYLIST)) {
@@ -201,7 +202,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
             }
 
             if (intent.getAction().equals(ACTION_NEXT)) {
-                nextSong(player.isPlaying());
+                nextSong();
                 KLog.d(ACTION_NEXT);
             }
 
@@ -228,7 +229,6 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     }
 
 
-
     @Override
     public void onDestroy() {
         super.onDestroy();
@@ -250,8 +250,9 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     }
 
     private void sendInfoBroadcast() {
-        if(player == null || currentSong == null)
+        if (player == null || currentSong == null)
             return;
+
 
         Intent updateIntent = new Intent();
         updateIntent.setAction(GUI_UPDATE_ACTION);
@@ -304,39 +305,21 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         loadCover();
     }
 
-    private void nextSong(boolean playOnLoaded) {
+    private void nextSong() {
         KLog.i("next song");
-        songPosition++;
-
-        if (songPosition >= playlist.getSongs().size()) {
-            songPosition = playlist.getSongs().size() - 1;
-            return;
+        if (player.getPlayer().getCurrentWindowIndex() < playlist.getSongs().size()-1) {
+            player.seekTo(player.getPlayer().getCurrentWindowIndex() + 1, 0);
+            sendBroadcastWithAction(NEXT_ACTION);
         }
-
-        currentSong = playlist.getSongs().get(songPosition);
-        createPlayer(playOnLoaded);
-
-        sendBroadcastWithAction(NEXT_ACTION);
-        loadCover();
     }
 
     private void previousSong(boolean playOnLoaded) {
         KLog.i("previous song");
 
-        songPosition--;
-
-        if (songPosition < 0) {
-            songPosition = 0;
-            return;
+        if (player.getPlayer().getCurrentWindowIndex() > 0) {
+            player.seekTo(player.getPlayer().getCurrentWindowIndex() - 1, 0);
+            sendBroadcastWithAction(PREVIOUS_ACTION);
         }
-
-        currentSong = playlist.getSongs().get(songPosition);
-        createPlayer(playOnLoaded);
-
-        sendBroadcastWithAction(PREVIOUS_ACTION);
-
-        KLog.e("previous currentEpisode");
-        loadCover();
     }
 
     private void loadCover() {
@@ -465,13 +448,12 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         );
         builder.setDeleteIntent(pdeleteIntent);
 
-        builder.setColor(ContextCompat.getColor(this,R.color.colorPrimary));
+        builder.setColor(ContextCompat.getColor(this, R.color.colorPrimary));
 
         NotificationManager mNotificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (player.isPlaying()) {
             startForeground(345, builder.build());
-        }
-        else {
+        } else {
             stopForeground(false);
             mNotificationManager.notify(345, builder.build());
         }
@@ -565,7 +547,7 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
 
     private void createPlayer(final boolean playOnLoaded) {
         KLog.w("createPlayer");
-        if (currentSong == null || currentSong.getUrl() == null) {
+        if (playlist == null) {
             stopSelf();
             return;
         }
@@ -574,9 +556,16 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
 
         isPrepared = false;
         killPlayer();
-        player = HybridMediaPlayer.getInstance(this);
+        player = new ExoMediaPlayer(this);
 
-        player.setDataSource(currentSong.getUrl());
+
+        String[] urls = new String[playlist.getSongs().size()];
+        for (int i = 0; i < urls.length; i++)
+            urls[i] = playlist.getSongs().get(i).getUrl();
+
+        player.setDataSource(urls);
+
+        player.setDataSource(urls);
 
         player.setOnErrorListener(new HybridMediaPlayer.OnErrorListener() {
             @Override
@@ -591,7 +580,6 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
             public void onPrepared(HybridMediaPlayer player) {
                 KLog.d("song prepared");
                 sendBroadcastWithAction(LOADED_ACTION);
-
 
                 Intent updateIntent = new Intent();
                 updateIntent.setAction(GUI_UPDATE_ACTION);
@@ -610,18 +598,23 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
         player.setOnCompletionListener(new HybridMediaPlayer.OnCompletionListener() {
             @Override
             public void onCompletion(HybridMediaPlayer player) {
-                if (songPosition == playlist.getSongs().size() - 1) {
-                    sendBroadcastWithAction(COMPLETE_ACTION);
-                    pause();
-                    isUpdatingThread = false;
-                    KLog.i("KONIEC PLAYLISTY");
+                sendBroadcastWithAction(COMPLETE_ACTION);
+            }
+        });
 
-                } else {
-                    KLog.i("KONIEC PIOSENKI");
-                    sendBroadcastWithAction(COMPLETE_ACTION);
-                    isUpdatingThread = false;
-                    nextSong(true);
-                }
+        player.setOnPositionDiscontinuityListener(new ExoMediaPlayer.OnPositionDiscontinuityListener() {
+            @Override
+            public void onPositionDiscontinuity(int currentWindowIndex) {
+                KLog.d("onPositionDiscontinuity");
+                KLog.d(currentWindowIndex);
+                if (songPosition == currentWindowIndex)
+                    return;
+                songPosition = currentWindowIndex;
+                currentSong = playlist.getSongs().get(currentWindowIndex);
+                KLog.d(currentSong.getTitle());
+                loadCover();
+                sendInfoBroadcast();
+                updateMediaSessionMetaData();
             }
         });
 
