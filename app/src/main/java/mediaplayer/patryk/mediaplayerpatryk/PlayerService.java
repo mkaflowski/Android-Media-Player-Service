@@ -92,10 +92,8 @@ public class PlayerService extends MediaBrowserServiceCompat implements AudioMan
     private ScreenReceiver screenReceiver = new ScreenReceiver();
 
     private Bitmap cover;
-    // TODO: 30.06.2017 ustawic coverPlaceholderId i notificationId
-    private int coverPlaceholderId = R.mipmap.ic_launcher;
-    private int notificationIconId = R.mipmap.ic_launcher;
-    private int smallNotificationIconId = R.mipmap.ic_launcher;
+    protected int coverPlaceholderId = R.mipmap.ic_launcher;
+    protected int smallNotificationIconId = R.mipmap.ic_launcher;
 
 
     private MediaSessionCompat mediaSessionCompat;
